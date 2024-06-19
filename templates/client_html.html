@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Firewall GUI</title>
+    <script type="text/javascript" src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <h1>Firewall GUI</h1>
+
+    <button id="start_sniffer_button">Start Sniffer</button>
+    <button id="stop_sniffer_button">Stop Sniffer</button>
+    <button id="show_rules_button">Show Rules</button>
+    <button id="choose_bpf_button">Update BPF Filter</button>
+    <button id="new_rule_button">New Rule</button>
+    <button id="delete_rule_button">Delete Rule</button>
+    <button id="delete_log_button">Delete Server Log</button>
+    <button id="download_log_button">Download Server Log</button>
+    <button id="disconnect_button">Disconnect</button>
+
+    <div id="choose_bpf_div" style="display: none;">
+        <h2>Update BPF Filter</h2>
+        <form id="bpf_form">
+            <label for="bpf_filter">Enter BPF Filter:</label>
+            <input type="text" id="bpf_filter" name="bpf_filter" required>
+            <button type="submit">Submit</button>
+        </form>
+    </div>
+
+    <div id="new_rule_div" style="display: none;">
+        <h2>Add New Rule</h2>
+        <form id="rule_form">
+            <!-- Dynamic form elements will be appended here -->
+        </form>
+    </div>
+
+    <div id="delete_rule_div" style="display: none;">
+        <h2>Delete Rule</h2>
+        <form id="delete_form">
+            <!-- Dynamic form elements will be appended here -->
+        </form>
+    </div>
+
+    <h2>LOG:</h2>
+    <div id="log_area" style="border: 1px solid #ccc; padding: 10px; margin-top: 20px; height: 200px; overflow-y: auto;"></div>
+
+    <script type="text/javascript">
+$(document).ready(function() {
+    // variable that serves as an I/O switch for accepting data with sniffer activation
+    var sniffer_switch = false;
+    // variable to mark all the buttons that should be disabled when a form is created or when the sniffer is started
+    var all_buttons = '#start_sniffer_button, #stop_sniffer_button, #show_rules_button, #new_rule_button, #delete_rule_button, #choose_bpf_button, #disconnect_button, #delete_log_button, #download_log_button';
+    /**
+     * Disable or enable all received buttons.
+     * button - string of all buttons to switch
+     * switch_state - boolean: true/false to disable/enable buttons.
+     */
+    function button_switch(button, switch_state) {
+        $(button).prop('disabled', switch_state);
+    }
+
+    /**
+     * Appends text to a log display.
+     * text - string parameter with data to append to the log.
+     */
+    function response_log(text) {
+        $('#log_area').append(text + '<br>');
+        // Scroll to the bottom of the log area to show the latest entries
+        $('#log_area').scrollTop($('#log_area')[0].scrollHeight);
+    }
+
+    /**
+     * Function to handle 'POST' form submissions via AJAX (Async javascript & XML) to avoid page reloads upon form
+     * submission
+     */
+	function form_submission(form_data, func_url, form_div, error_response) {
+        $(form_div).hide();
+        button_switch(all_buttons, false);
+        $.ajax({
+            type: 'POST',
+            url: func_url,
+            data: form_data,
+            success: function(response) {
+                response_log(response);
+            },
+            error: function() {
+                response_log(error_response);
+            }
+        });
+    }
+
+    /**
+     * Function to handle new form button click
+     * Receives instructions and splits them into a list of instructions and extracts a number that signals where
+     * instructions end and option data for the dropdown starts, does this via this structure:
+     * {^\d+:} ^ || string start | \d+  regular expression digit | : matches the colon in options structure
+     */
+    $('#new_rule_button').click(function() {
+        button_switch(all_buttons, true);
+        $.get('/new_rule', function(response) {
+            let instructions = response.split("#");
+            let options_start_index = instructions.findIndex(item => /^\d+:/.test(item));
+            $('#new_rule_div').show();
+            create_rule_form(instructions, options_start_index);
+        });
+
+    });
+
+    // Function to handle stop sniffer button click
+    $('#stop_sniffer_button').click(function() {
+        $.post('/stop_sniffer', function() {
+            button_switch(all_buttons, false);
+            button_switch('#start_sniffer_button',false)
+        });
+        // if sniffer is not running, a response is provided from the server.
+        if(!sniffer_switch){
+            handle_sniffer_responses();
+        }
+        sniffer_switch = false;
+    });
+
+    // Function to handle show rules button click, splits the response into a list to append each rule separately
+    $('#show_rules_button').click(function() {
+        $.get('/show_rules', function(response) {
+            let rules = response.split('#');
+            rules.forEach(rule => {
+                response_log(rule);
+            });
+        });
+    });
+
+    // Function to handle delete log button click
+    $('#delete_log_button').click(function() {
+        $.get('/delete_log', function(response) {
+            response_log(response)
+        });
+    });
+
+    // Function to handle update BPF filter button click
+    $('#choose_bpf_button').click(function() {
+        $.get('/choose_bpf', function(response) {
+            button_switch(all_buttons, true);
+            $('#choose_bpf_div').show();
+        });
+    });
+
+    // Function to handle download log button click, receives a client and server status response
+    $('#download_log_button').click(function() {
+        $.get('/download_log', function(responses) {
+            responses.forEach(response => {
+                response_log(response)
+            });
+        });
+    });
+
+    function handle_sniffer_responses() {
+        $.get('/sniffer_logger', function(response) {
+            response_log(response);
+            // Continue handling responses while sniffer_switch is true
+            if (sniffer_switch) {
+                handle_sniffer_responses();
+            }
+        });
+    }
+
+    /**
+     * Function to handle start sniffer button click
+     * switches the boolean sniffer_switch to true and runs recursively to read server messages about
+     * alerts within the sniffer
+     */
+    $('#start_sniffer_button').click(function() {
+        $.post('/start_sniffer', function() {
+            sniffer_switch = true;
+            button_switch(all_buttons, true);
+            button_switch('#stop_sniffer_button',false);
+            handle_sniffer_responses();
+        }).fail(function() {
+            response_log('[CLIENT] Error starting sniffer');
+            button_switch(all_buttons, false);
+            button_switch('#start_sniffer_button',true);
+        });
+    });
+
+    /**
+     * Function to handle delete rule button click
+     * receives the response (instruction#number of options) and splits with the '#' indicator
+     */
+    $('#delete_rule_button').click(function() {
+        $.get('/delete_rule', function(response) {
+            if (response.includes("No rules to delete")) {
+                response_log(response)
+            }
+            else {
+            button_switch(all_buttons, true);
+            response = response.split('#');
+            let instruction = response[0];
+            let num_options = parseInt(response[1]);
+            $('#delete_rule_div').show();
+            create_delete_form(instruction, num_options);
+            }
+        });
+    });
+
+    // Function to handle disconnect button click
+    $('#disconnect_button').click(function() {
+        $.get('/disconnect', function(response){
+            response_log(response)
+            alert(response)
+        });
+    });
+
+    // Function to handle BPF filter form submission
+    $('#bpf_form').submit(function(event) {
+        event.preventDefault();
+        var data = $(this).serialize();
+        form_submission(data, '/choose_bpf_form', '#choose_bpf_div', 'Error updating BPF filter');
+    });
+
+    // Function to handle add rule form submission
+    $('#rule_form').submit(function(event) {
+        event.preventDefault();
+        var data = $(this).serialize();
+        form_submission(data, '/new_rule_form', '#new_rule_div', 'Error adding rule');
+    });
+
+    // Function to handle delete rule form submission
+    $('#delete_form').submit(function(event) {
+        event.preventDefault();
+        var data = $(this).serialize();
+        form_submission(data, '/delete_rule_form', '#delete_rule_div', 'Error updating BPF filter');
+    });
+
+
+    /**
+     * Function to create add rule form elements
+     * creates labels and inputs according to instructions received
+     * last label for instructions is created as a dropdown menu with all the received options, after that index
+     * all data in the instructions parameter is the options available
+     * label index is received as: options_start_index
+     */
+    function create_rule_form(instructions, options_start_index) {
+        $('#rule_form').empty();
+        for (let i = 0; i < options_start_index - 1; i++) {
+            label = $('<label>').text(instructions[i]);
+            input = $('<input>').attr('type', 'text').attr('name', `input_${i}`);
+            $('#rule_form').append(label).append('<br>').append(input).append('<br><br>');
+        }
+
+        label = $('<label>').text(instructions[options_start_index - 1]);
+        let options = $('<select>').attr('name', 'option').attr('required', true);
+        $.each(instructions.slice(options_start_index), function(index, value) {
+            options.append($('<option>', {
+                value: index + 1,
+                text: value
+            }));
+        });
+        $('#rule_form').append(label).append('<br>').append(options).append('<br><br>');
+        $('#rule_form').append('<button type="submit">Submit</button>');
+    }
+
+    /**
+     * function to create the delete rule form, receives 2 parameters
+     * instruction - string to signal the label for the dropdown menu
+     * num_options - int number of dropdown options
+     */
+    function create_delete_form(instruction, num_options) {
+        $('#delete_form').empty();
+        let label = $('<label>').text(instruction + ':');
+        let options = $('<select>').attr('name', 'serial').attr('required', true);
+        for (let i = 0; i < num_options; i++) {
+            options.append($('<option>', {
+                value: i,
+                text: i
+            }));
+        }
+        $('#delete_form').append(label).append('<br>').append(options).append('<br><br>');
+        $('#delete_form').append('<button type="submit">Submit</button>');
+    }
+});
+    </script>
+</body>
+</html>
